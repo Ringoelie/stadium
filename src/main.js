@@ -4,6 +4,7 @@ import { buildCrowd } from './crowd.js';
 import { buildEnvironment, buildLights, buildSky } from './environment.js';
 import { Game, Explorer } from './game.js';
 import { CrowdAudio } from './audio.js';
+import { lambertize } from './optim.js';
 import { benchCamera, BENCH_FRAMES, SHOTS } from './benchpath.js';
 
 const params = new URLSearchParams(location.search);
@@ -15,10 +16,12 @@ const FORCE_WEBGL = params.get('backend') === 'webgl';
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ renderer
-const renderer = new THREE.WebGPURenderer({ antialias: !(params.get('off') || '').includes('aa'), forceWebGL: FORCE_WEBGL, powerPreference: 'high-performance' });
+const OFFS = params.get('off') || '';
+const renderer = new THREE.WebGPURenderer({ antialias: !OFFS.includes('aa'), forceWebGL: FORCE_WEBGL, powerPreference: 'high-performance', ...(OFFS.includes('u8') ? { outputBufferType: THREE.UnsignedByteType } : {}) });
 renderer.setPixelRatio(AUTOMATED ? 1 : Math.min(window.devicePixelRatio, 2));
 if (AUTOMATED) renderer.setSize(1280, 720, false); else renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = OFFS.includes('tm') ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+if (OFFS.includes('tm')) renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
 renderer.toneMappingExposure = 0.95;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -40,6 +43,8 @@ const stadium = buildStadium();
 scene.add(stadium.group);
 const crowd = buildCrowd();
 if (!OFF.has('crowd')) scene.add(crowd.mesh);
+if (OFF.has('cbasic')) crowd.mesh.traverse((o) => { if (o.isMesh) { const b = new THREE.MeshBasicNodeMaterial(); b.colorNode = o.material.colorNode; b.positionNode = o.material.positionNode; o.material = b; } });
+if (OFF.has('cshadow')) crowd.mesh.traverse((o) => { o.castShadow = false; });
 
 const audio = new CrowdAudio();
 const toast = (txt) => { const t = $('toast'); t.textContent = txt; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2200); };
@@ -51,6 +56,9 @@ const game = new Game(scene, {
   },
 });
 const explorer = new Explorer();
+// Rough dielectric surfaces (roughness >= 0.85) are shaded with Lambert: same diffuse term,
+// without the GGX specular evaluation that is nearly invisible at that roughness.
+lambertize(scene);
 const fmtClock = (t) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 // ------------------------------------------------------------------ input
