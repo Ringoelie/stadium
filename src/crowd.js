@@ -7,20 +7,33 @@ import { LOW, UP, COLS, perimPoint, lowerRows, isAisle } from './layout.js';
 // parts take the shirt colour and which take the skin colour.
 function personGeometry() {
   const parts = [];
-  const box = (w, h, d, x, y, z, shirt, skin) => {
-    const g = new THREE.BoxGeometry(w, h, d);
-    g.translate(x, y, z);
+  // drop: faces hidden by the neighbouring part or the floor (px, nx, py, ny, pz, nz)
+  const FACES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
+  const box = (w, h, d, x, y, z, shirt, skin, drop = []) => {
+    const src = new THREE.BoxGeometry(w, h, d);
+    src.translate(x, y, z);
+    // BoxGeometry stores 4 vertices and 6 indices per face, in FACES order
+    const pos = [], nor = [], idx = [];
+    FACES.forEach((f, i) => {
+      if (drop.includes(f)) return;
+      const base = pos.length / 3;
+      for (let v = i * 4; v < i * 4 + 4; v++) { pos.push(...src.attributes.position.array.slice(v * 3, v * 3 + 3)); nor.push(...src.attributes.normal.array.slice(v * 3, v * 3 + 3)); }
+      for (const k of src.index.array.slice(i * 6, i * 6 + 6)) idx.push(k - i * 4 + base);
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setIndex(idx);
     const n = g.attributes.position.count;
     g.setAttribute('mshirt', new THREE.Float32BufferAttribute(new Array(n).fill(shirt), 1));
     g.setAttribute('mskin', new THREE.Float32BufferAttribute(new Array(n).fill(skin), 1));
-    g.deleteAttribute('uv');
     parts.push(g);
   };
-  box(0.34, 0.8, 0.22, 0, 0.4, 0, 0, 0);         // legs
-  box(0.44, 0.62, 0.26, 0, 1.11, 0, 1, 0);       // torso
-  box(0.12, 0.58, 0.14, -0.29, 1.12, 0, 1, 0);   // arms
-  box(0.12, 0.58, 0.14, 0.29, 1.12, 0, 1, 0);
-  box(0.22, 0.25, 0.22, 0, 1.56, 0, 0, 1);       // head
+  box(0.34, 0.8, 0.22, 0, 0.4, 0, 0, 0, ['py', 'ny']);            // legs
+  box(0.44, 0.62, 0.26, 0, 1.11, 0, 1, 0, ['ny']);                // torso
+  box(0.12, 0.58, 0.14, -0.29, 1.12, 0, 1, 0, ['px', 'ny']);      // arms (inner face touches the torso)
+  box(0.12, 0.58, 0.14, 0.29, 1.12, 0, 1, 0, ['nx', 'ny']);
+  box(0.22, 0.25, 0.22, 0, 1.56, 0, 0, 1, ['ny']);                // head
   return mergeGeoms(parts);
 }
 
