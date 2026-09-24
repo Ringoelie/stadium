@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { attribute, mix, vec3, float } from 'three/tsl';
+import { attribute, mix, vec3, uniform, sin, max, fract, exp, positionLocal } from 'three/tsl';
 import { makeRng } from './rng.js';
 import { LOW, UP, COLS, perimPoint, lowerRows, isAisle } from './layout.js';
 
@@ -108,42 +108,58 @@ export function buildCrowd(seed = 3) {
     phase[i] = rng() * Math.PI * 2;
     amp[i] = s.seated ? 0.05 + rng() * 0.07 : 0.18 + rng() * 0.2;
   }
-  geo.setAttribute('shirt', new THREE.InstancedBufferAttribute(shirt, 3));
-  geo.setAttribute('skin', new THREE.InstancedBufferAttribute(skin, 3));
+
+  // Per-instance animation parameters: phase, amplitude, perimeter position k, seated flag.
+  const anim = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) { anim[i * 4] = phase[i]; anim[i * 4 + 1] = amp[i]; anim[i * 4 + 2] = slots[i].k; anim[i * 4 + 3] = slots[i].seated ? 1 : 0; }
 
   const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.9 });
   const pants = vec3(0.1, 0.11, 0.15);
   mat.colorNode = mix(mix(pants, attribute('shirt', 'vec3'), attribute('mshirt', 'float')), attribute('skin', 'vec3'), attribute('mskin', 'float'));
 
-  const mesh = new THREE.InstancedMesh(geo, mat, n);
-  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  mesh.castShadow = true; mesh.receiveShadow = true;
-  mesh.name = 'crowd';
-  mesh.frustumCulled = false;
+  // Animation runs in the vertex shader: barras jump to the beat, the sides do a mexican wave.
+  const uTime = uniform(0), uExcite = uniform(0);
+  const A = attribute('anim', 'vec4');
+  const beat = sin(uTime.mul(2 * Math.PI * 1.9).add(A.x.mul(0.35)).add(A.z.mul(6.0)));
+  const yStand = max(0, beat).mul(A.y).mul(uExcite.add(0.6));
+  const wave = fract(uTime.mul(0.09).sub(A.z.div(4)));
+  const d = wave.sub(0.5).mul(40);
+  const w = exp(d.mul(d).negate());
+  const ySeat = max(0, sin(uTime.mul(3).add(A.x))).mul(A.y).mul(uExcite).add(w.mul(0.45));
+  // offset is in world metres; the instance matrix scales seated people by 0.92
+  const yOff = mix(yStand, ySeat.div(0.92), A.w);
+  mat.positionNode = positionLocal.add(vec3(0, yOff, 0));
 
+  // Split into chunks along the bowl so off-screen parts are frustum culled.
+  const group = new THREE.Group(); group.name = 'crowd';
+  const chunkOf = (sl) => (sl.tier * 4 + sl.seg) * 6 + Math.min(5, Math.floor((sl.k - sl.seg) * 6));
+  const buckets = new Map();
+  for (let i = 0; i < n; i++) { const c = chunkOf(slots[i]); if (!buckets.has(c)) buckets.set(c, []); buckets.get(c).push(i); }
   const dummy = new THREE.Object3D();
-  const place = (t, excite) => {
-    for (let i = 0; i < n; i++) {
-      const s = slots[i];
-      // barras jump to the beat; the sides do a mexican wave now and then
-      let y = 0;
-      if (!s.seated) {
-        const beat = Math.sin(t * 2 * Math.PI * 1.9 + phase[i] * 0.35 + s.k * 6.0);
-        y = Math.max(0, beat) * amp[i] * (0.6 + excite);
-      } else {
-        const wave = ((t * 0.09 - s.k / 4) % 1 + 1) % 1; // travels around the ground
-        const w = Math.exp(-Math.pow((wave - 0.5) * 40, 2));
-        y = Math.max(0, Math.sin(t * 3 + phase[i])) * amp[i] * excite + w * 0.45;
-      }
-      dummy.position.set(s.x, s.y + y - (s.seated ? 0.38 : 0), s.z);
+  const sub = (src, ids, size) => { const out = new Float32Array(ids.length * size); ids.forEach((id, j) => { for (let q = 0; q < size; q++) out[j * size + q] = src[id * size + q]; }); return out; };
+  for (const [, ids] of [...buckets].sort((x, y) => x[0] - y[0])) {
+    const g = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'mshirt', 'mskin']) g.setAttribute(name, geo.attributes[name]);
+    g.setIndex(geo.index);
+    g.setAttribute('shirt', new THREE.InstancedBufferAttribute(sub(shirt, ids, 3), 3));
+    g.setAttribute('skin', new THREE.InstancedBufferAttribute(sub(skin, ids, 3), 3));
+    g.setAttribute('anim', new THREE.InstancedBufferAttribute(sub(anim, ids, 4), 4));
+    const mesh = new THREE.InstancedMesh(g, mat, ids.length);
+    ids.forEach((id, j) => {
+      const s = slots[id];
+      dummy.position.set(s.x, s.y - (s.seated ? 0.38 : 0), s.z);
       dummy.rotation.set(0, s.yaw, 0);
       const sc = s.seated ? 0.92 : 1;
       dummy.scale.set(sc, sc, sc);
       dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-  };
+      mesh.setMatrixAt(j, dummy.matrix);
+    });
+    mesh.computeBoundingSphere();
+    mesh.boundingSphere.radius += 1.5; // room for the vertex animation
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  const place = (t, excite) => { uTime.value = t; uExcite.value = excite; };
   place(0, 0);
-  return { mesh, count: n, update: place };
+  return { mesh: group, count: n, update: place };
 }
