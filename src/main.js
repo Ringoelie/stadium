@@ -15,7 +15,7 @@ const FORCE_WEBGL = params.get('backend') === 'webgl';
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ renderer
-const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: FORCE_WEBGL, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGPURenderer({ antialias: !(params.get('off') || '').includes('aa'), forceWebGL: FORCE_WEBGL, powerPreference: 'high-performance' });
 renderer.setPixelRatio(AUTOMATED ? 1 : Math.min(window.devicePixelRatio, 2));
 if (AUTOMATED) renderer.setSize(1280, 720, false); else renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -213,24 +213,34 @@ async function runBench() {
   // warm-up: compile every pipeline by visiting all shots
   for (let s = 0; s < SHOTS; s++) { benchCamera(camera, s * (BENCH_FRAMES / SHOTS) + 1, game); renderer.render(scene, camera); await gpuSync(); }
   const times = [], cpu = [];
-  for (let f = 0; f < BENCH_FRAMES; f++) {
+  // ?frames=N renders N evenly spaced frames of each shot (default: all 60)
+  const per = BENCH_FRAMES / SHOTS, fps = Math.min(per, Number(params.get('frames') || per));
+  const list = [];
+  for (let s = 0; s < SHOTS; s++) for (let i = 0; i < fps; i++) list.push(s * per + Math.floor(i * per / fps));
+  let simF = 0, draws = 0, tris = 0;
+  renderer.info.autoReset = false;
+  for (const f of list) {
+    while (simF < f) { game.update(DT, botInput()); simF++; }
+    simF++;
     const t0 = performance.now();
     simulate(DT, f * DT, botInput());
     benchCamera(camera, f, game);
+    renderer.info.reset();
     renderer.render(scene, camera);
     const t1 = performance.now();
+    draws += renderer.info.render.drawCalls; tris += renderer.info.render.triangles;
     await gpuSync();
     const t2 = performance.now();
     times.push(t2 - t0); cpu.push(t1 - t0);
+    if (times.length % 10 === 0) console.log(`bench frame ${times.length}/${list.length}: ${(t2 - t0).toFixed(1)} ms`);
   }
-  const info = renderer.info;
   const sum = (a) => a.reduce((x, y) => x + y, 0);
   const sorted = [...times].sort((a, b) => a - b);
   window.__bench = {
     backend: backendName, frames: times.length, total: sum(times), mean: sum(times) / times.length,
     p50: sorted[Math.floor(sorted.length * 0.5)], p95: sorted[Math.floor(sorted.length * 0.95)], cpuMean: sum(cpu) / cpu.length,
-    perShot: Array.from({ length: SHOTS }, (_, s) => sum(times.slice(s * BENCH_FRAMES / SHOTS, (s + 1) * BENCH_FRAMES / SHOTS)) / (BENCH_FRAMES / SHOTS)),
-    drawCalls: info.render.drawCalls, triangles: info.render.triangles, crowd: crowd.count,
+    perShot: Array.from({ length: SHOTS }, (_, s) => sum(times.slice(s * fps, (s + 1) * fps)) / fps),
+    drawCalls: draws / times.length, triangles: tris / times.length, crowd: crowd.count,
   };
 }
 

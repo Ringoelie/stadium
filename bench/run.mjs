@@ -12,7 +12,7 @@ const opt = (k, d) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i
 const runs = Number(opt('runs', 3));
 const backend = opt('backend', 'webgl');
 const ref = opt('ref', null);
-const dist = path.resolve(opt('dist', 'dist'));
+const dist = path.resolve(opt('dist', 'bench/build/' + label));
 const noShots = args.includes('--no-shots');
 const outDir = path.resolve('bench/out', label);
 fs.mkdirSync(outDir, { recursive: true });
@@ -43,22 +43,23 @@ async function page1(url, flag, timeout) {
   const p = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];
   p.on('pageerror', (e) => errors.push(String(e)));
-  p.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  p.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); else if (m.text().startsWith('bench')) console.error(m.text()); });
   await p.goto(url, { waitUntil: 'commit' });
   try { await p.waitForFunction((f) => window[f] || window.__ready, flag, { timeout, polling: 250 }); }
   catch (e) { await p.close(); throw e; }
   return { p, errors };
 }
 
-const q = backend === 'webgl' ? '&backend=webgl' : '';
-const results = { label, backend, runs: [], shots: [] };
+const frames = opt('frames', '5');
+const q = (opt('extra', '')) + (backend === 'webgl' ? '&backend=webgl' : '') + (frames ? '&frames=' + frames : '');
+const results = { label, backend, frames, runs: [], shots: [] };
 for (let r = 0; r < runs; r++) {
   const { p, errors } = await page(`${base}?bench${q}`, '__bench');
   const b = await p.evaluate(() => window.__bench);
   if (!b) { console.error('bench failed', errors); process.exit(1); }
   if (errors.length) console.error('page errors:', errors.slice(0, 5));
   results.runs.push(b);
-  console.log(`run ${r}: total ${b.total.toFixed(0)} ms, mean ${b.mean.toFixed(2)} ms, p95 ${b.p95.toFixed(2)}, cpu ${b.cpuMean.toFixed(2)}, draws ${b.drawCalls}, tris ${b.triangles} [${b.backend}]`);
+  console.log(`run ${r}: total ${b.total.toFixed(0)} ms, mean ${b.mean.toFixed(2)} ms, p95 ${b.p95.toFixed(2)}, cpu ${b.cpuMean.toFixed(2)}, draws ${Math.round(b.drawCalls)}, tris ${Math.round(b.triangles)} [${b.backend}]`);
   await p.close();
 }
 const totals = results.runs.map((r) => r.total).sort((a, b) => a - b);
