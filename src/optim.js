@@ -31,3 +31,52 @@ export function inlineOutput(renderer, toneMapping, colorSpace) {
     return renderOutput(setupOutput.call(this, builder, outputNode), toneMapping, colorSpace);
   };
 }
+
+// Merge every static mesh under `root` that shares a material (and shadow flags) into one
+// mesh, with the world transform baked into the vertices. Multi-material meshes are split by
+// group first. Subtrees flagged with userData.dynamic are left alone.
+export function mergeStatic(root, mergeGeometries) {
+  root.updateMatrixWorld(true);
+  const buckets = new Map();
+  const victims = [];
+  const isDynamic = (o) => { for (let p = o; p; p = p.parent) if (p.userData.dynamic) return true; return false; };
+  root.traverse((o) => {
+    // big meshes are already one draw call each and keep their own frustum culling
+    if (!o.isMesh || o.isInstancedMesh || isDynamic(o) || o.geometry.attributes.position.count > 20000) return;
+    const parts = [];
+    if (Array.isArray(o.material)) {
+      const g = o.geometry;
+      for (const grp of g.groups) {
+        const sub = new THREE.BufferGeometry();
+        for (const [name, attr] of Object.entries(g.attributes)) sub.setAttribute(name, attr);
+        sub.setIndex(Array.from(g.index.array.slice(grp.start, grp.start + grp.count)));
+        parts.push([sub, o.material[grp.materialIndex]]);
+      }
+    } else parts.push([o.geometry, o.material]);
+    for (const [geo, mat] of parts) {
+      const g = geo.clone();
+      g.applyMatrix4(o.matrixWorld);
+      if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
+      for (const name of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(name)) g.deleteAttribute(name);
+      g.morphAttributes = {};
+      const sig = Object.keys(g.attributes).sort().join(',');
+      const key = `${mat.uuid}|${o.castShadow}|${o.receiveShadow}|${sig}`;
+      if (!buckets.has(key)) buckets.set(key, { mat, cast: o.castShadow, recv: o.receiveShadow, geos: [], names: [] });
+      const b = buckets.get(key); b.geos.push(g); b.names.push(o.name);
+    }
+    victims.push(o);
+  });
+  for (const o of victims) o.parent.remove(o);
+  let meshes = 0;
+  for (const b of buckets.values()) {
+    const merged = mergeGeometries(b.geos, false);
+    merged.computeBoundingSphere(); merged.computeBoundingBox();
+    const m = new THREE.Mesh(merged, b.mat);
+    m.castShadow = b.cast; m.receiveShadow = b.recv;
+    m.name = b.names.find((n) => n) || 'merged';
+    m.matrixAutoUpdate = false;
+    root.add(m);
+    meshes++;
+  }
+  return { before: victims.length, after: meshes };
+}

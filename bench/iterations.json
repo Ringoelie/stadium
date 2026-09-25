@@ -1,5 +1,7 @@
 [
-  {"id": "v0", "title": "Versión base", "desc": "Primera versión funcional: público animado en CPU (37.000 matrices por fotograma), una malla por pieza (vigas, lámparas, edificios, árboles), sombras 4096² de todo, cielo procedural por píxel."},
+  {"id": "v0", "title": "Versión base", "desc": "Primera versión funcional: público animado en CPU (37.000 matrices por fotograma), una malla por pieza (vigas, lámparas, edificios, árboles), sombras 4096² de todo, cielo procedural por píxel, tone mapping en un pase final sobre un buffer de media precisión."},
   {"id": "v1", "title": "Público: animación en GPU + culling por bloques", "desc": "La animación (saltos de las barras y ola) pasa al vertex shader (TSL) con el mismo cálculo; las matrices de instancia quedan estáticas y el público se divide en 36 bloques con esfera envolvente para frustum culling."},
-  {"id": "v2", "title": "Público: quitar caras ocultas", "desc": "Se eliminan las caras que nunca se ven (bases, tapa de las piernas bajo el torso, cara interior de los brazos): 60 → 44 triángulos por persona."}
+  {"id": "v2", "title": "Público: quitar caras ocultas", "desc": "Se eliminan las caras que nunca se ven (bases, tapa de las piernas bajo el torso, cara interior de los brazos): 60 → 44 triángulos por persona."},
+  {"id": "v3", "title": "Lambert en todos los materiales rugosos", "desc": "Sustituye MeshStandard por Lambert en todo material no metálico con rugosidad ≥ 0,85.", "rejected": true, "reason": "MAE 1,25 % > 1 %: sin el término especular la escena queda más oscura."},
+  {"id": "v4", "title": "Tone mapping en los shaders + Lambert solo en el público", "desc": "ACES y la codificación sRGB se aplican al final de cada shader de material, así el MSAA se dibuja directo al canvas sin el buffer intermedio de media precisión ni el pase de pantalla completa. El público (pocos píxeles por persona) usa Lambert."}
 ]

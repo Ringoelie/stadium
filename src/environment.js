@@ -156,6 +156,7 @@ function buildMetro(group) {
     const w = new THREE.Mesh(new THREE.BoxGeometry(2.96, 1.1, 20), winM); w.position.set(1.8, 14.2, i * 23); train.add(w);
   }
   train.position.x = -230;
+  train.userData.dynamic = true;
   group.add(train);
   return {
     update(t) { train.position.z = ((t * 18) % 2200) - 1100; },

@@ -4,7 +4,8 @@ import { buildCrowd } from './crowd.js';
 import { buildEnvironment, buildLights, buildSky } from './environment.js';
 import { Game, Explorer } from './game.js';
 import { CrowdAudio } from './audio.js';
-import { lambertize, inlineOutput } from './optim.js';
+import { lambertize, mergeStatic } from './optim.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { benchCamera, BENCH_FRAMES, SHOTS } from './benchpath.js';
 
 const params = new URLSearchParams(location.search);
@@ -20,11 +21,8 @@ const OFFS = params.get('off') || '';
 const renderer = new THREE.WebGPURenderer({ antialias: !OFFS.includes('aa'), forceWebGL: FORCE_WEBGL, powerPreference: 'high-performance', ...(OFFS.includes('u8') ? { outputBufferType: THREE.UnsignedByteType } : {}) });
 renderer.setPixelRatio(AUTOMATED ? 1 : Math.min(window.devicePixelRatio, 2));
 if (AUTOMATED) renderer.setSize(1280, 720, false); else renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.95;
-// ACES tone mapping + sRGB encoding are applied at the end of every material shader, so the
-// renderer draws (with MSAA) straight into the canvas instead of an intermediate half-float
-// target followed by a full-screen output pass.
-inlineOutput(renderer, THREE.ACESFilmicToneMapping, THREE.SRGBColorSpace);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 $('app').appendChild(renderer.domElement);
@@ -40,9 +38,13 @@ const OFF = new Set((params.get('off') || '').split(','));
 buildLights(scene);
 if (OFF.has('shadow')) renderer.shadowMap.enabled = false;
 const sky = OFF.has('sky') ? { cloudSpeed: { value: 0 } } : buildSky(scene);
-const { metro } = OFF.has('env') ? { metro: { update() {} } } : buildEnvironment(scene);
+const env = OFF.has('env') ? { metro: { update() {} } } : buildEnvironment(scene);
+const { metro } = env;
 const stadium = buildStadium();
 scene.add(stadium.group);
+// ~1,500 separate static meshes (beams, lamps, boards, buildings, trees) -> one mesh per material
+const mergeInfo = [mergeStatic(stadium.group, mergeGeometries), env.group && mergeStatic(env.group, mergeGeometries)];
+console.log('merged static meshes', JSON.stringify(mergeInfo));
 const crowd = buildCrowd();
 if (!OFF.has('crowd')) scene.add(crowd.mesh);
 if (OFF.has('cbasic')) crowd.mesh.traverse((o) => { if (o.isMesh) { const b = new THREE.MeshBasicNodeMaterial(); b.colorNode = o.material.colorNode; b.positionNode = o.material.positionNode; o.material = b; } });
