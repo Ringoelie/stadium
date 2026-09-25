@@ -4,7 +4,7 @@ import { buildCrowd } from './crowd.js';
 import { buildEnvironment, buildLights, buildSky } from './environment.js';
 import { Game, Explorer } from './game.js';
 import { CrowdAudio } from './audio.js';
-import { lambertize } from './optim.js';
+import { lambertize, inlineOutput } from './optim.js';
 import { benchCamera, BENCH_FRAMES, SHOTS } from './benchpath.js';
 
 const params = new URLSearchParams(location.search);
@@ -20,9 +20,11 @@ const OFFS = params.get('off') || '';
 const renderer = new THREE.WebGPURenderer({ antialias: !OFFS.includes('aa'), forceWebGL: FORCE_WEBGL, powerPreference: 'high-performance', ...(OFFS.includes('u8') ? { outputBufferType: THREE.UnsignedByteType } : {}) });
 renderer.setPixelRatio(AUTOMATED ? 1 : Math.min(window.devicePixelRatio, 2));
 if (AUTOMATED) renderer.setSize(1280, 720, false); else renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = OFFS.includes('tm') ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
-if (OFFS.includes('tm')) renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
 renderer.toneMappingExposure = 0.95;
+// ACES tone mapping + sRGB encoding are applied at the end of every material shader, so the
+// renderer draws (with MSAA) straight into the canvas instead of an intermediate half-float
+// target followed by a full-screen output pass.
+inlineOutput(renderer, THREE.ACESFilmicToneMapping, THREE.SRGBColorSpace);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 $('app').appendChild(renderer.domElement);
@@ -56,9 +58,8 @@ const game = new Game(scene, {
   },
 });
 const explorer = new Explorer();
-// Rough dielectric surfaces (roughness >= 0.85) are shaded with Lambert: same diffuse term,
-// without the GGX specular evaluation that is nearly invisible at that roughness.
-lambertize(scene);
+// Spectators are a few pixels each: shade them with Lambert (same diffuse term, no GGX specular).
+lambertize(crowd.mesh);
 const fmtClock = (t) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 // ------------------------------------------------------------------ input
