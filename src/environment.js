@@ -63,7 +63,8 @@ function buildTerrain(group) {
   g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
-  m.receiveShadow = true; m.name = 'terrain';
+  // the only terrain inside the shadow map area is the valley floor hidden below the plaza
+  m.receiveShadow = false; m.name = 'terrain';
   group.add(m);
 }
 

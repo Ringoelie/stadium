@@ -4,7 +4,7 @@ import { buildCrowd } from './crowd.js';
 import { buildEnvironment, buildLights, buildSky } from './environment.js';
 import { Game, Explorer } from './game.js';
 import { CrowdAudio } from './audio.js';
-import { lambertize, mergeStatic } from './optim.js';
+import { lambertize, mergeStatic, pruneShadows } from './optim.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { benchCamera, BENCH_FRAMES, SHOTS } from './benchpath.js';
 
@@ -35,16 +35,17 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, AUTOMATED ? 1280 / 720 : innerWidth / innerHeight, 0.25, 40000);
 
 const OFF = new Set((params.get('off') || '').split(','));
-buildLights(scene);
+const { sun } = buildLights(scene);
 if (OFF.has('shadow')) renderer.shadowMap.enabled = false;
 const sky = OFF.has('sky') ? { cloudSpeed: { value: 0 } } : buildSky(scene);
 const env = OFF.has('env') ? { metro: { update() {} } } : buildEnvironment(scene);
 const { metro } = env;
 const stadium = buildStadium();
 scene.add(stadium.group);
+const pruned = [pruneShadows(stadium.group, sun), env.group ? pruneShadows(env.group, sun) : 0];
 // ~1,500 separate static meshes (beams, lamps, boards, buildings, trees) -> one mesh per material
 const mergeInfo = [mergeStatic(stadium.group, mergeGeometries), env.group && mergeStatic(env.group, mergeGeometries)];
-console.log('merged static meshes', JSON.stringify(mergeInfo));
+console.log('merged static meshes', JSON.stringify(mergeInfo), 'shadow-pruned', pruned);
 const crowd = buildCrowd();
 if (!OFF.has('crowd')) scene.add(crowd.mesh);
 if (OFF.has('cbasic')) crowd.mesh.traverse((o) => { if (o.isMesh) { const b = new THREE.MeshBasicNodeMaterial(); b.colorNode = o.material.colorNode; b.positionNode = o.material.positionNode; o.material = b; } });
@@ -195,7 +196,7 @@ function frame() {
     }
   }
   if (Math.floor(game.clock) !== frame.lastSec) { frame.lastSec = Math.floor(game.clock); stadium.scoreboard.draw(game.score[0], game.score[1], fmtClock(game.clock)); }
-  renderer.render(scene, camera);
+  crowd.lod(camera); renderer.render(scene, camera);
   fpsAcc += dt; fpsN++;
   if (fpsAcc > 0.5) { $('fps').textContent = `${Math.round(fpsN / fpsAcc)} fps · ${backendName}`; fpsAcc = 0; fpsN = 0; }
 }
@@ -222,7 +223,7 @@ function stepTo(frameIdx) {
 async function runBench() {
   sky.cloudSpeed.value = 0;
   // warm-up: compile every pipeline by visiting all shots
-  for (let s = 0; s < SHOTS; s++) { benchCamera(camera, s * (BENCH_FRAMES / SHOTS) + 1, game); renderer.render(scene, camera); await gpuSync(); }
+  for (let s = 0; s < SHOTS; s++) { benchCamera(camera, s * (BENCH_FRAMES / SHOTS) + 1, game); crowd.lod(camera); renderer.render(scene, camera); await gpuSync(); }
   const times = [], cpu = [];
   // ?frames=N renders N evenly spaced frames of each shot (default: all 60)
   const per = BENCH_FRAMES / SHOTS, fps = Math.min(per, Number(params.get('frames') || per));
@@ -237,7 +238,7 @@ async function runBench() {
     simulate(DT, f * DT, botInput());
     benchCamera(camera, f, game);
     renderer.info.reset();
-    renderer.render(scene, camera);
+    crowd.lod(camera); renderer.render(scene, camera);
     const t1 = performance.now();
     draws += renderer.info.render.drawCalls; tris += renderer.info.render.triangles;
     await gpuSync();
@@ -263,7 +264,7 @@ async function runShot(s) {
   metro.update(f * DT);
   game.updateMeshes(0);
   benchCamera(camera, f, game);
-  for (let i = 0; i < 3; i++) { renderer.render(scene, camera); await gpuSync(); }
+  for (let i = 0; i < 3; i++) { crowd.lod(camera); renderer.render(scene, camera); await gpuSync(); }
   window.__shotReady = true;
 }
 

@@ -5,7 +5,7 @@ import { LOW, UP, COLS, perimPoint, lowerRows, isAisle } from './layout.js';
 
 // One spectator: legs, torso, arms and head as boxes. Vertex attributes mark which
 // parts take the shirt colour and which take the skin colour.
-function personGeometry() {
+function personGeometry(lod = false) {
   const parts = [];
   // drop: faces hidden by the neighbouring part or the floor (px, nx, py, ny, pz, nz)
   const FACES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
@@ -30,6 +30,12 @@ function personGeometry() {
     parts.push(g);
   };
   box(0.34, 0.8, 0.22, 0, 0.4, 0, 0, 0, ['py', 'ny']);            // legs
+  if (lod) {
+    // far LOD: arms (same shirt colour, 1 cm from the torso) merged into one torso box
+    box(0.70, 0.62, 0.26, 0, 1.11, 0, 1, 0, ['ny']);
+    box(0.22, 0.25, 0.22, 0, 1.56, 0, 0, 1, ['ny']);
+    return mergeGeoms(parts);
+  }
   box(0.44, 0.62, 0.26, 0, 1.11, 0, 1, 0, ['ny']);                // torso
   box(0.12, 0.58, 0.14, -0.29, 1.12, 0, 1, 0, ['px', 'ny']);      // arms (inner face touches the torso)
   box(0.12, 0.58, 0.14, 0.29, 1.12, 0, 1, 0, ['nx', 'ny']);
@@ -108,7 +114,7 @@ export function crowdSlots(seed = 3) {
 export function buildCrowd(seed = 3) {
   const slots = crowdSlots(seed);
   const rng = makeRng(seed * 7 + 1);
-  const geo = personGeometry();
+  const geo = personGeometry(), geoLod = personGeometry(true);
   const n = slots.length;
   const shirt = new Float32Array(n * 3), skin = new Float32Array(n * 3);
   const c = new THREE.Color();
@@ -149,6 +155,7 @@ export function buildCrowd(seed = 3) {
   const buckets = new Map();
   for (let i = 0; i < n; i++) { const c = chunkOf(slots[i]); if (!buckets.has(c)) buckets.set(c, []); buckets.get(c).push(i); }
   const dummy = new THREE.Object3D();
+  const chunks = [];
   const sub = (src, ids, size) => { const out = new Float32Array(ids.length * size); ids.forEach((id, j) => { for (let q = 0; q < size; q++) out[j * size + q] = src[id * size + q]; }); return out; };
   for (const [, ids] of [...buckets].sort((x, y) => x[0] - y[0])) {
     const g = new THREE.BufferGeometry();
@@ -170,9 +177,28 @@ export function buildCrowd(seed = 3) {
     mesh.computeBoundingSphere();
     mesh.boundingSphere.radius += 1.5; // room for the vertex animation
     mesh.castShadow = true; mesh.receiveShadow = true;
-    group.add(mesh);
+    // far version sharing the per-instance data
+    const gl = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'mshirt', 'mskin']) gl.setAttribute(name, geoLod.attributes[name]);
+    gl.setIndex(geoLod.index);
+    for (const name of ['shirt', 'skin', 'anim']) gl.setAttribute(name, g.attributes[name]);
+    const far = new THREE.InstancedMesh(gl, mat, ids.length);
+    far.instanceMatrix = mesh.instanceMatrix;
+    far.boundingSphere = mesh.boundingSphere.clone();
+    far.castShadow = true; far.receiveShadow = true; far.visible = false;
+    group.add(mesh, far);
+    chunks.push({ near: mesh, far });
   }
   const place = (t, excite) => { uTime.value = t; uExcite.value = excite; };
+  // pick the detail level of each chunk from its distance to the camera
+  const LOD_DIST = 60;
+  const lod = (camera) => {
+    for (const c of chunks) {
+      const s = c.near.boundingSphere;
+      const near = camera.position.distanceTo(s.center) - s.radius < LOD_DIST;
+      c.near.visible = near; c.far.visible = !near;
+    }
+  };
   place(0, 0);
-  return { mesh: group, count: n, update: place };
+  return { mesh: group, count: n, update: place, lod };
 }

@@ -80,3 +80,24 @@ export function mergeStatic(root, mergeGeometries) {
   }
   return { before: victims.length, after: meshes };
 }
+
+// Objects whose bounds lie completely outside the directional light's shadow camera cannot
+// cast into the shadow map nor receive from it (lookups outside the map read as "lit"),
+// so their shadow flags are cleared: fewer objects in the shadow pass, no PCF lookups.
+export function pruneShadows(root, light) {
+  light.updateMatrixWorld(true);
+  light.target.updateMatrixWorld(true);
+  light.shadow.updateMatrices(light);
+  const cam = light.shadow.camera;
+  const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+  const sphere = new THREE.Sphere();
+  root.updateMatrixWorld(true);
+  let pruned = 0;
+  root.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh) return;
+    if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+    sphere.copy(o.geometry.boundingSphere).applyMatrix4(o.matrixWorld);
+    if (!frustum.intersectsSphere(sphere)) { if (o.castShadow || o.receiveShadow) pruned++; o.castShadow = false; o.receiveShadow = false; }
+  });
+  return pruned;
+}
